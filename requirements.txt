@@ -1,3 +1,4 @@
 zstandard
 bs4
 validators
+tldextract

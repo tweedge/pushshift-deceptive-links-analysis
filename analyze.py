@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 import multiprocessing as mp
 from validators import url
+import tldextract
 
 
 DCTX = zstd.ZstdDecompressor(max_window_size=2**31)
@@ -26,9 +27,21 @@ def read_files(file_queue, input):
         if not file_path:
             break
 
+        buffer_input = []
+        buffer_input_ctr = 0
+
         zst_file = Path(file_path)
         for record in read_lines_from_zst_file(zst_file):
-            input.put([True, record])
+            buffer_input.append(record)
+            buffer_input_ctr += 1
+
+            if buffer_input_ctr > 1000:
+                input.put([True, buffer_input])
+                buffer_input = []
+                buffer_input_ctr = 0
+
+        if buffer_input_ctr > 0:
+            input.put([True, buffer_input])
 
 
 def do_work(input, output):
@@ -37,78 +50,90 @@ def do_work(input, output):
         if command[0] == False:
             break
 
-        data = command[1]
+        buffered_input = command[1]
 
-        record = json.loads(data)
-        submission = record.get("selftext")  # if submission
-        comment = record.get("body")  # if comment
-
-        raw_text = ""
-        text_type = ""
-        if submission:
-            raw_text = submission
-            text_type = "submission"
-        if comment:
-            raw_text = comment
-            text_type = "comment"
-
-        if not text_type:
-            continue  # sloppy
-
-        md = markdown.markdown(raw_text)
-        soup = BeautifulSoup(md, "lxml")
-
-        for link in soup.findAll("a"):
-            link_text = link.string
-
-            if not link_text:
-                continue
-
-            link_text = link_text.strip()
-
-            if not link_text.startswith("http"):
-                continue
-
+        for data in buffered_input:
             try:
-                link_text_valid = url(link_text)
-            except Exception:
-                continue
-            if not link_text_valid:
-                continue
+                record = json.loads(data)
+                submission = record.get("selftext")  # if submission
+                comment = record.get("body")  # if comment
 
-            link_text_domain = urlparse(link_text).netloc.lower()
+                raw_text = ""
+                text_type = ""
+                if submission:
+                    raw_text = submission
+                    text_type = "submission"
+                if comment:
+                    raw_text = comment
+                    text_type = "comment"
 
-            if not link_text_domain:
-                continue
+                if not text_type:
+                    continue  # sloppy
 
-            link_goto = link.get("href")
+                md = markdown.markdown(raw_text)
+                soup = BeautifulSoup(md, "lxml")
 
-            try:
-                link_goto_valid = url(link_goto)
-            except Exception:
-                continue
-            if not link_goto_valid:
-                continue
+                for link in soup.findAll("a"):
+                    link_text = link.string
 
-            link_goto_domain = urlparse(link_goto).netloc.lower()
+                    if not link_text:
+                        continue
 
-            if not link_goto_domain:
-                continue
+                    link_text = link_text.strip()
 
-            if link_text_domain != link_goto_domain:
-                save = {
-                    "link_text": link_text,
-                    "link_text_domain": link_text_domain,
-                    "link_goto": link_goto,
-                    "link_goto_domain": link_goto_domain,
-                    "author": record.get("author"),
-                    "subreddit": record.get("subreddit"),
-                    "created": int(record.get("created_utc")),
-                    "edited": int(record.get("edited")),
-                    "text_type": text_type,
-                }
-                output.put(save)
-                print(save)
+                    if not link_text.startswith("http"):
+                        continue
+
+                    try:
+                        link_text_valid = url(link_text)
+                    except Exception:
+                        continue
+                    if not link_text_valid:
+                        continue
+
+                    link_text_domain = urlparse(link_text).netloc.lower()
+
+                    if not link_text_domain:
+                        continue
+
+                    tld_test = tldextract.extract(link_text_domain)
+                    if not (tld_test.domain and tld_test.suffix):
+                        continue
+
+                    link_goto = link.get("href")
+
+                    try:
+                        link_goto_valid = url(link_goto)
+                    except Exception:
+                        continue
+                    if not link_goto_valid:
+                        continue
+
+                    link_goto_domain = urlparse(link_goto).netloc.lower()
+
+                    if not link_goto_domain:
+                        continue
+
+                    tld_test = tldextract.extract(link_goto_domain)
+                    if not (tld_test.domain and tld_test.suffix):
+                        continue
+
+                    if link_text_domain != link_goto_domain:
+                        save = {
+                            "link_text": link_text,
+                            "link_text_domain": link_text_domain,
+                            "link_goto": link_goto,
+                            "link_goto_domain": link_goto_domain,
+                            "author": record.get("author"),
+                            "subreddit": record.get("subreddit"),
+                            "created": int(record.get("created_utc")),
+                            "edited": int(record.get("edited")),
+                            "text_type": text_type,
+                        }
+                        output.put(save)
+                        print(save)
+            except Exception as e:
+                print(f"WARN: could not parse a record due to {e}, contents: {data}")
 
 
 def save_work(output, db_name):
@@ -172,12 +197,19 @@ if __name__ == "__main__":
         default=1,
         help="The number of threads that should process text for deceptive links (recommended: num_cpus - reader_threads)",
     )
+    parser.add_argument(
+        "--queue-length",
+        required=False,
+        type=int,
+        default=100,
+        help="The number of jobs to queue for worker threads (each job can contain up to 1k posts/comments)",
+    )
     args = parser.parse_args()
 
     # set up queues for handling cross-process communication, all size-limited for safety
-    file_queue = mp.Queue(maxsize=1000)
-    input = mp.Queue(maxsize=250000)
-    output = mp.Queue(maxsize=250000)
+    file_queue = mp.Queue()
+    input = mp.Queue(maxsize=args.queue_length)
+    output = mp.Queue()
 
     # start the database thread
     db = mp.Process(
