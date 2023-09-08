@@ -33,13 +33,13 @@ def read_files(file_queue, input):
         zst_file = Path(file_path)
         for record in read_lines_from_zst_file(zst_file):
             # weed out content that *cannot* have links (for speed)
-            if not "](" in record:
-                continue
+            #if not "](" in record:
+            #    continue
 
             buffer_input.append(record)
             buffer_input_ctr += 1
 
-            if buffer_input_ctr > 1000:
+            if buffer_input_ctr > 10000:
                 input.put([True, buffer_input])
                 buffer_input = []
                 buffer_input_ctr = 0
@@ -74,7 +74,7 @@ def do_work(input, output):
                 if not text_type:
                     continue  # sloppy
 
-                # weed out content that *cannot* have links *again* (for speed)
+                # weed out content that *cannot* have links (for speed)
                 if not "[" in raw_text:
                     continue
                 if not "(" in raw_text:
@@ -214,7 +214,7 @@ if __name__ == "__main__":
         required=False,
         type=int,
         default=100,
-        help="The number of jobs to queue for worker threads (each job can contain up to 1k posts/comments)",
+        help="The number of jobs to queue for worker threads (each job can contain up to 10k posts/comments)",
     )
     args = parser.parse_args()
 
