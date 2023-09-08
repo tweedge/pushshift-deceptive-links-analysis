@@ -39,7 +39,7 @@ def read_files(file_queue, input):
             buffer_input.append(record)
             buffer_input_ctr += 1
 
-            if buffer_input_ctr > 10000:
+            if buffer_input_ctr > 1000:
                 input.put([True, buffer_input])
                 buffer_input = []
                 buffer_input_ctr = 0
@@ -139,6 +139,7 @@ def do_work(input, output):
                             "created": int(record.get("created_utc")),
                             "edited": int(record.get("edited")),
                             "text_type": text_type,
+                            "id": record.get("id"),
                         }
                         output.put(save)
                         print(save)
@@ -151,7 +152,7 @@ def save_work(output, db_name):
     cur = con.cursor()
 
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS deceptive(link_text TEXT, link_text_domain TEXT, link_goto TEXT, link_goto_domain TEXT, author TEXT, subreddit TEXT, created INT, edited INT, text_type TEXT)"
+        "CREATE TABLE IF NOT EXISTS deceptive(link_text TEXT, link_text_domain TEXT, link_goto TEXT, link_goto_domain TEXT, author TEXT, subreddit TEXT, created INT, edited INT, text_type TEXT, id TEXT)"
     )
     con.commit()
 
@@ -173,9 +174,10 @@ def save_work(output, db_name):
             save["created"],
             save["edited"],
             save["text_type"],
+            save["id"],
         )
 
-        cur.execute("INSERT INTO deceptive VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)", insert)
+        cur.execute("INSERT INTO deceptive VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", insert)
         con.commit()
 
 
@@ -211,8 +213,8 @@ if __name__ == "__main__":
         "--queue-length",
         required=False,
         type=int,
-        default=10,
-        help="The number of jobs to queue for worker threads (each job can contain up to 10k posts/comments)",
+        default=100,
+        help="The number of jobs to queue for worker threads (each job can contain up to 1k posts/comments)",
     )
     args = parser.parse_args()
 
